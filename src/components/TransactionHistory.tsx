@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -36,7 +35,15 @@ const TransactionHistory = () => {
         .limit(10);
 
       if (error) throw error;
-      setTransactions(data || []);
+      
+      // Type assertion to ensure the data matches our Transaction interface
+      const typedTransactions = (data || []).map(transaction => ({
+        ...transaction,
+        type: transaction.type as 'deposit' | 'withdrawal',
+        status: transaction.status as 'pending' | 'completed' | 'failed'
+      }));
+      
+      setTransactions(typedTransactions);
     } catch (error) {
       console.error('Error fetching transactions:', error);
     } finally {
