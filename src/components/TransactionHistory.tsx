@@ -36,11 +36,14 @@ const TransactionHistory = () => {
 
       if (error) throw error;
       
-      // Type assertion to ensure the data matches our Transaction interface
-      const typedTransactions = (data || []).map(transaction => ({
-        ...transaction,
+      // Properly cast the data to match our Transaction interface
+      const typedTransactions: Transaction[] = (data || []).map(transaction => ({
+        id: transaction.id,
         type: transaction.type as 'deposit' | 'withdrawal',
-        status: transaction.status as 'pending' | 'completed' | 'failed'
+        currency: transaction.currency,
+        amount: Number(transaction.amount),
+        status: transaction.status as 'pending' | 'completed' | 'failed',
+        created_at: transaction.created_at
       }));
       
       setTransactions(typedTransactions);
