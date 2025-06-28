@@ -1,5 +1,5 @@
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -8,14 +8,61 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Bitcoin, DollarSign, Wallet, ArrowUpRight, ArrowDownLeft, Plus, Minus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import PortfolioCard from '@/components/PortfolioCard';
 import TransactionHistory from '@/components/TransactionHistory';
+
+interface UserBalance {
+  currency: string;
+  balance: number;
+}
 
 const Dashboard = () => {
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [selectedCoin, setSelectedCoin] = useState('bitcoin');
+  const [selectedCoin, setSelectedCoin] = useState('BTC');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [balances, setBalances] = useState<UserBalance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (user) {
+      fetchBalances();
+    }
+  }, [user]);
+
+  const fetchBalances = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_balances')
+        .select('currency, balance')
+        .eq('user_id', user?.id);
+
+      if (error) throw error;
+      setBalances(data || []);
+    } catch (error) {
+      console.error('Error fetching balances:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch balances",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getBTCBalance = () => {
+    const btcBalance = balances.find(b => b.currency === 'BTC');
+    return btcBalance ? btcBalance.balance : 0;
+  };
+
+  const getUSDTBalance = () => {
+    const usdtBalance = balances.find(b => b.currency === 'USDT');
+    return usdtBalance ? usdtBalance.balance : 0;
+  };
 
   const handleDeposit = async () => {
     if (!depositAmount || parseFloat(depositAmount) <= 0) {
@@ -28,14 +75,51 @@ const Dashboard = () => {
     }
 
     setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
+    
+    try {
+      // Insert transaction record
+      const { error: transactionError } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user?.id,
+          type: 'deposit',
+          currency: selectedCoin,
+          amount: parseFloat(depositAmount),
+          status: 'completed'
+        });
+
+      if (transactionError) throw transactionError;
+
+      // Update user balance
+      const { error: balanceError } = await supabase
+        .from('user_balances')
+        .upsert({
+          user_id: user?.id,
+          currency: selectedCoin,
+          balance: selectedCoin === 'BTC' 
+            ? getBTCBalance() + parseFloat(depositAmount)
+            : getUSDTBalance() + parseFloat(depositAmount)
+        });
+
+      if (balanceError) throw balanceError;
+
       toast({
-        title: "Deposit Initiated",
-        description: `Deposit of ${depositAmount} ${selectedCoin.toUpperCase()} has been initiated`,
+        title: "Deposit Successful",
+        description: `Deposited ${depositAmount} ${selectedCoin} to your account`,
       });
+      
       setDepositAmount('');
-    }, 2000);
+      fetchBalances(); // Refresh balances
+    } catch (error) {
+      console.error('Deposit error:', error);
+      toast({
+        title: "Deposit Failed",
+        description: "There was an error processing your deposit",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleWithdraw = async () => {
@@ -48,16 +132,69 @@ const Dashboard = () => {
       return;
     }
 
-    setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
+    const currentBalance = selectedCoin === 'BTC' ? getBTCBalance() : getUSDTBalance();
+    if (parseFloat(withdrawAmount) > currentBalance) {
       toast({
-        title: "Withdrawal Initiated",
-        description: `Withdrawal of ${withdrawAmount} ${selectedCoin.toUpperCase()} has been initiated`,
+        title: "Insufficient Balance",
+        description: "You don't have enough balance for this withdrawal",
+        variant: "destructive",
       });
+      return;
+    }
+
+    setIsProcessing(true);
+    
+    try {
+      // Insert transaction record
+      const { error: transactionError } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user?.id,
+          type: 'withdrawal',
+          currency: selectedCoin,
+          amount: parseFloat(withdrawAmount),
+          status: 'completed'
+        });
+
+      if (transactionError) throw transactionError;
+
+      // Update user balance
+      const { error: balanceError } = await supabase
+        .from('user_balances')
+        .upsert({
+          user_id: user?.id,
+          currency: selectedCoin,
+          balance: currentBalance - parseFloat(withdrawAmount)
+        });
+
+      if (balanceError) throw balanceError;
+
+      toast({
+        title: "Withdrawal Successful",
+        description: `Withdrew ${withdrawAmount} ${selectedCoin} from your account`,
+      });
+      
       setWithdrawAmount('');
-    }, 2000);
+      fetchBalances(); // Refresh balances
+    } catch (error) {
+      console.error('Withdrawal error:', error);
+      toast({
+        title: "Withdrawal Failed",
+        description: "There was an error processing your withdrawal",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -71,30 +208,30 @@ const Dashboard = () => {
         {/* Portfolio Overview */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <PortfolioCard
-            title="Total Balance"
-            value="$45,231.89"
-            change="+12.5%"
-            isPositive={true}
-            icon="dollar"
-          />
-          <PortfolioCard
-            title="Bitcoin Holdings"
-            value="1.25 BTC"
-            change="+8.2%"
+            title="BTC Balance"
+            value={`${getBTCBalance().toFixed(8)} BTC`}
+            change="+0.0%"
             isPositive={true}
             icon="bitcoin"
           />
           <PortfolioCard
-            title="USDT Holdings"
-            value="12,450 USDT"
-            change="-2.1%"
-            isPositive={false}
+            title="USDT Balance"
+            value={`${getUSDTBalance().toFixed(2)} USDT`}
+            change="+0.0%"
+            isPositive={true}
+            icon="dollar"
+          />
+          <PortfolioCard
+            title="Total Value"
+            value={`$${getUSDTBalance().toFixed(2)}`}
+            change="+0.0%"
+            isPositive={true}
             icon="dollar"
           />
           <PortfolioCard
             title="Today's P&L"
-            value="+$1,234.56"
-            change="+15.3%"
+            value="$0.00"
+            change="+0.0%"
             isPositive={true}
             icon="dollar"
           />
@@ -131,13 +268,13 @@ const Dashboard = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="bitcoin">
+                          <SelectItem value="BTC">
                             <div className="flex items-center space-x-2">
                               <Bitcoin className="h-4 w-4" />
                               <span>Bitcoin (BTC)</span>
                             </div>
                           </SelectItem>
-                          <SelectItem value="usdt">
+                          <SelectItem value="USDT">
                             <div className="flex items-center space-x-2">
                               <DollarSign className="h-4 w-4" />
                               <span>Tether (USDT)</span>
@@ -151,7 +288,8 @@ const Dashboard = () => {
                       <Input
                         id="deposit-amount"
                         type="number"
-                        placeholder={`Enter ${selectedCoin === 'bitcoin' ? 'BTC' : 'USDT'} amount`}
+                        step="0.00000001"
+                        placeholder={`Enter ${selectedCoin} amount`}
                         value={depositAmount}
                         onChange={(e) => setDepositAmount(e.target.value)}
                         className="bg-background/50"
@@ -165,7 +303,7 @@ const Dashboard = () => {
                       {isProcessing ? 'Processing...' : (
                         <>
                           <ArrowDownLeft className="h-4 w-4 mr-2" />
-                          Deposit {selectedCoin === 'bitcoin' ? 'BTC' : 'USDT'}
+                          Deposit {selectedCoin}
                         </>
                       )}
                     </Button>
@@ -179,13 +317,13 @@ const Dashboard = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="bitcoin">
+                          <SelectItem value="BTC">
                             <div className="flex items-center space-x-2">
                               <Bitcoin className="h-4 w-4" />
                               <span>Bitcoin (BTC)</span>
                             </div>
                           </SelectItem>
-                          <SelectItem value="usdt">
+                          <SelectItem value="USDT">
                             <div className="flex items-center space-x-2">
                               <DollarSign className="h-4 w-4" />
                               <span>Tether (USDT)</span>
@@ -199,11 +337,17 @@ const Dashboard = () => {
                       <Input
                         id="withdraw-amount"
                         type="number"
-                        placeholder={`Enter ${selectedCoin === 'bitcoin' ? 'BTC' : 'USDT'} amount`}
+                        step="0.00000001"
+                        placeholder={`Enter ${selectedCoin} amount`}
                         value={withdrawAmount}
                         onChange={(e) => setWithdrawAmount(e.target.value)}
                         className="bg-background/50"
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Available: {selectedCoin === 'BTC' 
+                          ? `${getBTCBalance().toFixed(8)} BTC` 
+                          : `${getUSDTBalance().toFixed(2)} USDT`}
+                      </p>
                     </div>
                     <Button
                       onClick={handleWithdraw}
@@ -213,7 +357,7 @@ const Dashboard = () => {
                       {isProcessing ? 'Processing...' : (
                         <>
                           <ArrowUpRight className="h-4 w-4 mr-2" />
-                          Withdraw {selectedCoin === 'bitcoin' ? 'BTC' : 'USDT'}
+                          Withdraw {selectedCoin}
                         </>
                       )}
                     </Button>
